@@ -1,0 +1,332 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix prefix: <http://qudt.org/vocab/prefix/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix qkdv: <http://qudt.org/vocab/dimensionvector/> .
+@prefix quantitykind: <http://qudt.org/vocab/quantitykind/> .
+@prefix qudt: <http://qudt.org/schema/qudt/> .
+@prefix si-unit: <https://si-digital-framework.org/SI/units/> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix sou: <http://qudt.org/vocab/sou/> .
+@prefix unit: <http://qudt.org/vocab/unit/> .
+@prefix vaem: <http://www.linkedmodel.org/schema/vaem#> .
+@prefix voag: <http://voag.linkedmodel.org/schema/voag#> .
+
+<http://qudt.org/3.1.9-SNAPSHOT/vocab/unit>
+  a owl:Ontology ;
+  owl:imports <http://qudt.org/3.1.9-SNAPSHOT/schema/facade/qudt> ;
+  owl:imports <http://qudt.org/3.1.9-SNAPSHOT/vocab/prefix> ;
+  owl:imports <http://qudt.org/3.1.9-SNAPSHOT/vocab/quantitykind> ;
+  owl:imports <http://qudt.org/3.1.9-SNAPSHOT/vocab/sou> ;
+  owl:versionIRI <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "QUDT Vocab Units of Measure Release 3.1.9-SNAPSHOT" ;
+  vaem:hasGraphMetadata vaem:GMD_QUDT-UNITS-ALL .
+
+
+unit:A
+  a qudt:Unit ;
+  dcterms:description """$\\textit{Ampere}$, often shortened to $\\text{amp}$, 
+is the SI unit of electric current and is one of the seven SI base units defined as:
+
+$$\\text{A} \\equiv \\frac{\\textit{C}}{\\textit{s}} 
+\\equiv \\frac{\\textit{coulomb}}{\\textit{second}} 
+\\equiv \\frac{\\text{joule}}{\\text{weber}}$$
+
+Note that SI supports only the use of symbols and deprecates the use of any abbreviations for units.
+"""^^qudt:LatexString ;
+  qudt:applicableSystem sou:CGS-EMU ;
+  qudt:applicableSystem sou:CGS-GAUSS ;
+  qudt:applicableSystem sou:PLANCK ;
+  qudt:applicableSystem sou:SI ;
+  qudt:conversionMultiplier 1.0 ;
+  qudt:conversionMultiplierSN 1.0E0 ;
+  qudt:dbpediaMatch "http://dbpedia.org/resource/Ampere"^^xsd:anyURI ;
+  qudt:hasDimensionVector qkdv:A0E1L0I0M0H0T0D0 ;
+  qudt:hasQuantityKind quantitykind:CurrentLinkage ;
+  qudt:hasQuantityKind quantitykind:DisplacementCurrent ;
+  qudt:hasQuantityKind quantitykind:ElectricCurrent ;
+  qudt:hasQuantityKind quantitykind:ElectricCurrentPhasor ;
+  qudt:hasQuantityKind quantitykind:MagneticTension ;
+  qudt:hasQuantityKind quantitykind:MagnetomotiveForce ;
+  qudt:hasQuantityKind quantitykind:TotalCurrent ;
+  qudt:iec61360Code "0112/2///62720#UAA101" ;
+  qudt:informativeReference "http://en.wikipedia.org/wiki/Ampere?oldid=494026699"^^xsd:anyURI ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAA101"^^xsd:anyURI ;
+  qudt:omUnit <http://www.ontology-of-units-of-measure.org/resource/om-2/ampere> ;
+  qudt:siExactMatch si-unit:ampere ;
+  qudt:symbol "A" ;
+  qudt:ucumCode "A"^^qudt:UCUMcs ;
+  qudt:udunitsCode "A" ;
+  qudt:uneceCommonCode "AMP" ;
+  qudt:wikidataMatch <http://www.wikidata.org/entity/Q25272> ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Amper"@hu ;
+  rdfs:label "Amper"@pl ;
+  rdfs:label "Amper"@ro ;
+  rdfs:label "Amper"@sl ;
+  rdfs:label "Amper"@tr ;
+  rdfs:label "Ampere" ;
+  rdfs:label "Ampere"@de ;
+  rdfs:label "Ampere"@en ;
+  rdfs:label "Ampere"@it ;
+  rdfs:label "Ampere"@ms ;
+  rdfs:label "Ampere"@pt ;
+  rdfs:label "Amperio"@es ;
+  rdfs:label "Amperium"@la ;
+  rdfs:label "Ampère"@fr ;
+  rdfs:label "Ampér"@cs ;
+  rdfs:label "Αμπέρ"@el ;
+  rdfs:label "Ампер"@bg ;
+  rdfs:label "Ампер"@ru ;
+  rdfs:label "אמפר"@he ;
+  rdfs:label "آمپر"@fa ;
+  rdfs:label "أمبير"@ar ;
+  rdfs:label "एम्पीयर"@hi ;
+  rdfs:label "アンペア"@ja ;
+  rdfs:label "安培"@zh ;
+  skos:altLabel "amp" .
+
+unit:A-HR
+  a qudt:DerivedUnit, qudt:Unit ;
+  dcterms:description """$\\textit{Ampere Hour}$ is a practical unit of electric charge equal to the charge flowing
+   in one hour through a conductor passing one ampere. 
+   An ampere-hour or amp-hour (symbol $Ah,\\,AHr,\\, A \\cdot h, A h$) is a unit of electric
+    charge, with sub-units milliampere-hour ($mAh$) and milliampere second ($mAs$).
+    One ampere-hour is equal to 3600 coulombs (ampere-seconds), the electric charge transferred
+     by a steady current of one ampere for one hour. 
+    The ampere-hour is frequently used in measurements of electrochemical systems such as
+     electroplating and electrical batteries. 
+    The commonly seen milliampere-hour ($mAh$ or $mA \\cdot h$) is one-thousandth of an
+     ampere-hour ($3.6 \\,coulombs$).
+  """^^qudt:LatexString ;
+  qudt:applicableSystem sou:CGS ;
+  qudt:applicableSystem sou:CGS-EMU ;
+  qudt:applicableSystem sou:CGS-GAUSS ;
+  qudt:applicableSystem sou:SI ;
+  qudt:conversionMultiplier 3600.0 ;
+  qudt:conversionMultiplierSN 3.6E3 ;
+  qudt:hasDimensionVector qkdv:A0E1L0I0M0H0T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:BatteryCapacity ;
+  qudt:hasQuantityKind quantitykind:ElectricCharge ;
+  qudt:iec61360Code "0112/2///62720#UAA102" ;
+  qudt:informativeReference "http://en.wikipedia.org/wiki/Ampere-hour"^^xsd:anyURI ;
+  qudt:informativeReference "http://www.oxfordreference.com/view/10.1093/acref/9780199233991.001.0001/acref-9780199233991-e-86"^^xsd:anyURI ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAA102"^^xsd:anyURI ;
+  qudt:symbol "A·h" ;
+  qudt:ucumCode "A.h"^^qudt:UCUMcs ;
+  qudt:uneceCommonCode "AMH" ;
+  qudt:wikidataMatch <http://www.wikidata.org/entity/Q212120> ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour" ;
+  rdfs:label "Ampere Hour"@en .
+
+unit:A-HR-PER-DEG_C
+  a qudt:Unit ;
+  dcterms:description """$\\textit{Ampere Hour per Degree Celsius}$ is the product of the SI base unit ampere and the unit hour
+ divided by the unit degree Celsius.
+ """^^qudt:LatexString ;
+  qudt:conversionMultiplier 3600.0 ;
+  qudt:conversionMultiplierSN 3.6E3 ;
+  qudt:hasDimensionVector qkdv:A0E1L0I0M0H-1T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent -1 ;
+    qudt:hasUnit unit:DEG_C ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:Unknown ;
+  qudt:iec61360Code "0112/2///62720#UAD886" ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAD886"^^xsd:anyURI ;
+  qudt:symbol "A·h/°C" ;
+  qudt:ucumCode "A.h.Cel-1"^^qudt:UCUMcs ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour per Degree Celsius" ;
+  rdfs:label "Ampere Hour per Degree Celsius"@en .
+
+unit:A-HR-PER-DeciM3
+  a qudt:Unit ;
+  dcterms:description """$\\textit{Ampere Hour per Cubic Decimetre}$ is the product of the SI base unit ampere
+ and the unit hour divided by 0.001-fold of the power of the SI base unit metre with
+  the exponent 3.
+ """^^qudt:LatexString ;
+  qudt:conversionMultiplier 3600000.0 ;
+  qudt:conversionMultiplierSN 3.6E6 ;
+  qudt:hasDimensionVector qkdv:A0E1L-3I0M0H0T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent -3 ;
+    qudt:hasUnit unit:DeciM ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:ElectricChargeDensity ;
+  qudt:hasQuantityKind quantitykind:ElectricChargeVolumeDensity ;
+  qudt:iec61360Code "0112/2///62720#UAD883" ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAD883"^^xsd:anyURI ;
+  qudt:symbol "A·h/dm³" ;
+  qudt:ucumCode "A.h.dm-3"^^qudt:UCUMcs ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour per Cubic Decimeter"@en-US ;
+  rdfs:label "Ampere Hour per Cubic Decimetre" ;
+  rdfs:label "Ampere Hour per Cubic Decimetre"@en .
+
+unit:A-HR-PER-KiloGM
+  a qudt:Unit ;
+  dcterms:description "product of the SI base unit ampere and the unit hour divided by the SI base unit kilogram" ;
+  qudt:conversionMultiplier 3600.0 ;
+  qudt:conversionMultiplierSN 3.6E3 ;
+  qudt:hasDimensionVector qkdv:A0E1L0I0M-1H0T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent -1 ;
+    qudt:hasUnit unit:KiloGM ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:ElectricChargePerMass ;
+  qudt:iec61360Code "0112/2///62720#UAD884" ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAD884"^^xsd:anyURI ;
+  qudt:symbol "A·h/kg" ;
+  qudt:ucumCode "A.h.kg-1"^^qudt:UCUMcs ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour per Kilogram" ;
+  rdfs:label "Ampere Hour per Kilogram"@en .
+
+unit:A-HR-PER-M2
+  a qudt:Unit ;
+  dcterms:description "product of the SI base unit ampere and the unit hour divided by the power of the SI base unit metre with the exponent 2" ;
+  qudt:conversionMultiplier 3600.0 ;
+  qudt:conversionMultiplierSN 3.6E3 ;
+  qudt:hasDimensionVector qkdv:A0E1L-2I0M0H0T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent -2 ;
+    qudt:hasUnit unit:M ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:ElectricChargePerArea ;
+  qudt:hasQuantityKind quantitykind:ElectricChargeSurfaceDensity ;
+  qudt:hasQuantityKind quantitykind:ElectricPolarization ;
+  qudt:iec61360Code "0112/2///62720#UAD885" ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAD885"^^xsd:anyURI ;
+  qudt:symbol "A·h/m²" ;
+  qudt:ucumCode "A.h.m-2"^^qudt:UCUMcs ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour per Square Meter"@en-US ;
+  rdfs:label "Ampere Hour per Square Metre" ;
+  rdfs:label "Ampere Hour per Square Metre"@en .
+
+unit:A-HR-PER-M3
+  a qudt:Unit ;
+  dcterms:description "product of the SI base unit ampere and the unit hour divided by the power of the SI base unit metre with the exponent 3" ;
+  qudt:conversionMultiplier 3600.0 ;
+  qudt:conversionMultiplierSN 3.6E3 ;
+  qudt:hasDimensionVector qkdv:A0E1L-3I0M0H0T1D0 ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:A ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent 1 ;
+    qudt:hasUnit unit:HR ;
+  ] ;
+  qudt:hasFactorUnit [
+    qudt:exponent -3 ;
+    qudt:hasUnit unit:M ;
+  ] ;
+  qudt:hasQuantityKind quantitykind:ElectricChargeDensity ;
+  qudt:hasQuantityKind quantitykind:ElectricChargeVolumeDensity ;
+  qudt:iec61360Code "0112/2///62720#UAD882" ;
+  qudt:informativeReference "https://cdd.iec.ch/cdd/iec62720/iec62720.nsf/Units/0112-2---62720%23UAD882"^^xsd:anyURI ;
+  qudt:symbol "A·h/m³" ;
+  qudt:ucumCode "A.h.m-3"^^qudt:UCUMcs ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "Ampere Hour per Cubic Meter"@en-US ;
+  rdfs:label "Ampere Hour per Cubic Metre" ;
+  rdfs:label "Ampere Hour per Cubic Metre"@en .
+
+  vaem:GMD_QUDT-UNITS-ALL
+  a vaem:GraphMetaData ;
+  dcterms:contributor "Jack Hodges" ;
+  dcterms:contributor "Simon J D Cox" ;
+  dcterms:contributor "Steve Ray" ;
+  dcterms:created "2019-07-30"^^xsd:date ;
+  dcterms:creator "Steve Ray" ;
+  dcterms:modified "2025-12-11T08:57:28-05:00"^^xsd:dateTime ;
+  dcterms:rights """
+  This product includes all or a portion of the UCUM table, UCUM codes, and UCUM definitions
+   or is derived from it, subject to a license from Regenstrief Institute, Inc. and The UCUM Organization. 
+  Your use of the UCUM table, UCUM codes, UCUM definitions also is subject to this license,
+   a copy of which is available at ​http://unitsofmeasure.org. 
+  The current complete UCUM table, UCUM Specification are available for download at ​http://unitsofmeasure.org. 
+  The UCUM table and UCUM codes are copyright © 1995-2009, Regenstrief Institute, Inc. and the Unified Codes for Units of Measures (UCUM) Organization.
+  All rights reserved.
+  THE UCUM TABLE (IN ALL FORMATS), UCUM DEFINITIONS, AND SPECIFICATION ARE PROVIDED 'AS IS.' ANY EXPRESS OR IMPLIED WARRANTIES ARE DISCLAIMED,
+   INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+  """ ;
+  dcterms:rights "The QUDT Ontologies are issued under a Creative Commons Attribution 4.0 International License (CC BY 4.0), available at https://creativecommons.org/licenses/by/4.0/. Attribution should be made to QUDT.org" ;
+  dcterms:subject "Units-All" ;
+  dcterms:title "QUDT Units Version 3.1 Vocabulary" ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "QUDT Unit of Measure Vocabulary Metadata Version 3.1.9-SNAPSHOT" ;
+  vaem:description "Standard units of measure for all units." ;
+  vaem:graphName "qudt" ;
+  vaem:graphTitle "QUDT Units Version 3.1.9-SNAPSHOT" ;
+  vaem:hasGraphRole vaem:VocabularyGraph ;
+  vaem:hasOwner vaem:QUDT.org ;
+  vaem:hasSteward vaem:QUDT.org ;
+  vaem:intent "To provide a vocabulary of all units." ;
+  vaem:isMetadataFor <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  vaem:latestPublishedVersion "https://qudt.org/doc/2025/12/DOC_VOCAB-UNITS-ALL.html"^^xsd:anyURI ;
+  vaem:logo "https://qudt.org/linkedmodels.org/assets/lib/lm/images/logos/qudt_logo-300x110.png"^^xsd:anyURI ;
+  vaem:namespace "http://qudt.org/vocab/unit/"^^xsd:anyURI ;
+  vaem:namespacePrefix "unit" ;
+  vaem:owner "QUDT.org" ;
+  vaem:previousPublishedVersion "https://qudt.org/doc/TODO-set-property-qudtPrevReleaseYear/TODO-set-property-qudtPrevReleaseMonth/DOC_VOCAB-UNITS-ALL.html"^^xsd:anyURI ;
+  vaem:turtleFileURL "http://qudt.org/3.1.9-SNAPSHOT/vocab/unit"^^xsd:anyURI ;
+  vaem:usesNonImportedResource dcterms:abstract ;
+  vaem:usesNonImportedResource dcterms:created ;
+  vaem:usesNonImportedResource dcterms:creator ;
+  vaem:usesNonImportedResource dcterms:modified ;
+  vaem:usesNonImportedResource dcterms:title .
+
+voag:QUDT-UNITS-VocabCatalogEntry
+  a vaem:CatalogEntry ;
+  rdfs:isDefinedBy <http://qudt.org/3.1.9-SNAPSHOT/vocab/unit> ;
+  rdfs:label "QUDT Units Vocab Catalog Entry" .
+
+
