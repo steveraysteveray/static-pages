@@ -23,6 +23,23 @@ PAGE_TMPL = """<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
+
+  <!-- MathJax (LaTeX rendering) -->
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+        processEscapes: true
+      },
+      options: {
+        // IMPORTANT: do NOT skip table cell tags so math in cells gets processed
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+
   <style>
     body { font-family: Calibri, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; line-height: 1.35; }
     header { margin-bottom: 1.25rem; }
@@ -36,6 +53,9 @@ PAGE_TMPL = """<!doctype html>
     .bnode { color: #444; }
     .lit { color: #111; }
     .small { font-size: 0.9rem; color: #666; }
+
+    /* Preserve line breaks in long literals */
+    .prewrap { white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -159,14 +179,143 @@ def render_bnode(bn: BNode) -> str:
     return f"<span class='bnode'>_:{html.escape(str(bn))}</span>"
 
 
+_LATEX_HINTS = (
+    "\\cdot",
+    "\\frac",
+    "\\sqrt",
+    "\\mathrm",
+    "\\mathbf",
+    "\\mathit",
+    "\\left",
+    "\\right",
+    "\\over",
+    "\\times",
+    "\\pm",
+)
+
+
+def looks_like_latex(s: str) -> bool:
+    t = s.strip()
+    if not t:
+        return False
+    if "$" in t:
+        return True
+    if any(h in t for h in _LATEX_HINTS):
+        return True
+    if t.startswith("\\(") or t.startswith("\\["):
+        return True
+    return False
+
+
+def is_qudt_latex_string(g: Graph, lit: Literal) -> bool:
+    """
+    True when datatype looks like qudt:LatexString (by QName localname),
+    even if the prefix mapping differs.
+    """
+    if not lit.datatype:
+        return False
+    try:
+        dt_uri = URIRef(lit.datatype)
+        parts = try_curie_parts(g, dt_uri)
+        if parts and parts[2] == "LatexString":
+            return True
+        # fallback: URI localname
+        return str(dt_uri).rstrip("/#").endswith("LatexString")
+    except Exception:
+        return False
+
+
+def convert_dollar_math_to_mathjax(s: str) -> str:
+    """
+    Convert embedded $...$ and $$...$$ segments inside an arbitrary string into
+    MathJax-safe delimiters \\(...\\) and \\[...\\], removing the dollar signs.
+
+    This handles the unit:A style strings where LaTeX is mixed with prose, e.g.:
+      "... defined as: $$A = C/s = ...$$ Note that ..."
+
+    Rules:
+    - $$...$$ -> \\[...\\]
+    - $...$   -> \\(...\\)
+    - Backslash-escaped dollars (\\$) are left alone.
+    - If a delimiter is unmatched, we leave it as literal '$' text.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(s)
+
+    def is_escaped(pos: int) -> bool:
+        # count preceding backslashes
+        k = pos - 1
+        bs = 0
+        while k >= 0 and s[k] == "\\":
+            bs += 1
+            k -= 1
+        return (bs % 2) == 1
+
+    while i < n:
+        if s[i] == "$" and not is_escaped(i):
+            # $$ display?
+            if i + 1 < n and s[i + 1] == "$" and not is_escaped(i + 1):
+                j = i + 2
+                while j + 1 < n:
+                    if s[j] == "$" and s[j + 1] == "$" and not is_escaped(j) and not is_escaped(j + 1):
+                        inner = s[i + 2 : j]
+                        out.append("\\[" + inner + "\\]")
+                        i = j + 2
+                        break
+                    j += 1
+                else:
+                    # no closing $$ found
+                    out.append("$")
+                    i += 1
+                continue
+
+            # $ inline
+            j = i + 1
+            while j < n:
+                if s[j] == "$" and not is_escaped(j):
+                    inner = s[i + 1 : j]
+                    out.append("\\(" + inner + "\\)")
+                    i = j + 1
+                    break
+                j += 1
+            else:
+                # no closing $ found
+                out.append("$")
+                i += 1
+            continue
+
+        out.append(s[i])
+        i += 1
+
+    return "".join(out)
+
+
 def render_literal(g: Graph, lit: Literal) -> str:
-    text = html.escape(str(lit))
+    raw = str(lit)
+
+    # If it’s explicitly typed as LatexString (QUDT), treat it as “prose + embedded math”.
+    if is_qudt_latex_string(g, lit) or looks_like_latex(raw):
+        # Convert embedded $...$ / $$...$$ to MathJax delimiters so the $ never shows.
+        converted = convert_dollar_math_to_mathjax(raw)
+
+        # Escape HTML but keep backslashes etc. (html.escape does not touch backslashes)
+        converted_esc = html.escape(converted, quote=False)
+
+        # IMPORTANT: don't wrap the whole thing in math mode; leave it as prose
+        # containing \\(...\\) and \\[...\\] segments for MathJax to process.
+        content = f"<span class='lit prewrap'>{converted_esc}</span>"
+    else:
+        txt = html.escape(raw, quote=False)
+        content = f"<span class='lit prewrap'>“{txt}”</span>"
+
     extras = ""
     if lit.language:
         extras += f"@{html.escape(lit.language)}"
     if lit.datatype:
         extras += f"^^{render_uri(g, URIRef(lit.datatype))}"
-    return f"<span class='lit'>“{text}”</span>{extras}"
+
+    return content + extras
 
 
 def render_term(g: Graph, term: Any) -> str:
@@ -191,7 +340,7 @@ def link_if_internal_subject(g: Graph, term: Any) -> str:
 
         if (term, None, None) in g:
             href = f"{slugify(str(term))}.html"
-            label = render_uri(g, term)  # already <code>...</code>
+            label = render_uri(g, term)
             return f"<a href='{html.escape(href)}'>{label}</a>"
         return render_uri(g, term)
 
@@ -304,7 +453,6 @@ def main() -> int:
                 "key": html.escape(label.lower()),
             }
         )
-
     items.sort(key=lambda it: it["key"])
 
     index_html = index_t.render(title=args.title, count=len(items), items=items)
