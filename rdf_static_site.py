@@ -12,8 +12,9 @@ from jinja2 import Environment, BaseLoader, select_autoescape
 
 QUDT = Namespace("http://qudt.org/schema/qudt/")
 
-# Prefixes that should hyperlink to qudt.org with content negotiation
-QUDT_LINK_PREFIXES = {"unit", "qkdv", "quantitykind", "qudt"}
+# Prefixes that should hyperlink to qudt.org with content negotiation.
+# (e.g., unit:M -> https://qudt.org/vocab/unit/M)
+QUDT_LINK_PREFIXES = {"unit", "qkdv", "quantitykind", "qudt", "sou"}
 
 
 PAGE_TMPL = """<!doctype html>
@@ -23,7 +24,7 @@ PAGE_TMPL = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; line-height: 1.35; }
+    body { font-family: Calibri, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; line-height: 1.35; }
     header { margin-bottom: 1.25rem; }
     .meta { color: #555; font-size: 0.95rem; }
     table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
@@ -35,7 +36,6 @@ PAGE_TMPL = """<!doctype html>
     .bnode { color: #444; }
     .lit { color: #111; }
     .small { font-size: 0.9rem; color: #666; }
-    .hint { color:#777; font-size: 0.9rem; margin-top: 0.35rem; }
   </style>
 </head>
 <body>
@@ -75,7 +75,7 @@ INDEX_TMPL = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
+    body { font-family: Calibri, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
     input { width: 100%; padding: 0.6rem; font-size: 1rem; margin: 1rem 0; }
     ul { padding-left: 1.2rem; }
     li { margin: 0.25rem 0; }
@@ -126,9 +126,7 @@ def slugify(s: str) -> str:
 
 
 def try_curie_parts(g: Graph, uri: URIRef) -> Optional[Tuple[str, str, str]]:
-    """
-    Return (prefix, namespace, localname) if graph can compute a QName, else None.
-    """
+    """Return (prefix, namespace, localname) if graph can compute a QName, else None."""
     try:
         prefix, namespace, local = g.namespace_manager.compute_qname(uri)
         return prefix, str(namespace), local
@@ -152,10 +150,8 @@ def render_uri(g: Graph, uri: URIRef) -> str:
             href = html.escape(namespace + local)
             return f"<a href='{href}'><code>{curie_esc}</code></a>"
 
-        # Otherwise just show as code (curie)
         return f"<code>{curie_esc}</code>"
 
-    # Fall back to full IRI
     return f"<code>{html.escape(str(uri))}</code>"
 
 
@@ -193,7 +189,6 @@ def link_if_internal_subject(g: Graph, term: Any) -> str:
         if parts and parts[0] in QUDT_LINK_PREFIXES:
             return render_uri(g, term)
 
-        # Local link for other URI subjects we generated pages for
         if (term, None, None) in g:
             href = f"{slugify(str(term))}.html"
             label = render_uri(g, term)  # already <code>...</code>
@@ -208,9 +203,7 @@ def sort_key_term(term: Any) -> str:
 
 
 def iter_subjects(g: Graph) -> Iterable[URIRef]:
-    """
-    Interpret “instance declarations” as URI subjects that have at least one triple.
-    """
+    """Interpret “instance declarations” as URI subjects that have at least one triple."""
     seen: set[URIRef] = set()
     for s in g.subjects():
         if isinstance(s, URIRef) and s not in seen:
@@ -250,10 +243,7 @@ def subject_rows_with_double_hop(g: Graph, subject: URIRef) -> list[Tuple[str, s
         p_disp = render_term(g, p)
 
         if p == QUDT.hasFactorUnit and isinstance(o, BNode):
-            # 1) hide the bnode identifier on the hasFactorUnit row
-            rows.append((p_disp, ""))
-
-            # 2) still expand the bnode one hop
+            rows.append((p_disp, ""))  # hide _:bnode
             rows.extend(expand_factor_unit_bnode(g, o))
         else:
             rows.append((p_disp, link_if_internal_subject(g, o)))
@@ -288,7 +278,6 @@ def main() -> int:
     # Per-subject pages
     for s in subjects:
         triples = subject_rows_with_double_hop(g, s)
-
         types = [render_term(g, t) for t in g.objects(s, RDF.type)]
         subject_display = render_term(g, s)
 
@@ -302,11 +291,10 @@ def main() -> int:
         )
         filename.write_text(html_out, encoding="utf-8")
 
-    # Index page
+    # Index page (alphabetical)
     items = []
     for s in subjects:
         href = f"{slugify(str(s))}.html"
-        # display label as CURIE if possible, else full IRI
         parts = try_curie_parts(g, s)
         label = f"{parts[0]}:{parts[2]}" if parts else str(s)
         items.append(
@@ -316,6 +304,8 @@ def main() -> int:
                 "key": html.escape(label.lower()),
             }
         )
+
+    items.sort(key=lambda it: it["key"])
 
     index_html = index_t.render(title=args.title, count=len(items), items=items)
     (out_dir / "index.html").write_text(index_html, encoding="utf-8")
