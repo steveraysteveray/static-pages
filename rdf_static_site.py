@@ -3,16 +3,15 @@ from __future__ import annotations
 
 import argparse
 import html
+import re
 from pathlib import Path
-from typing import Iterable, Tuple, Any, Optional
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
-from rdflib import Graph, URIRef, BNode, Literal, Namespace
+from jinja2 import BaseLoader, Environment, select_autoescape
+from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, XSD
-from jinja2 import Environment, BaseLoader, select_autoescape
 
 QUDT = Namespace("http://qudt.org/schema/qudt/")
-
-QUDT_LINK_PREFIXES = {"unit", "qkdv", "quantitykind", "qudt", "sou"}
 
 
 PAGE_TMPL = """<!doctype html>
@@ -146,6 +145,20 @@ def slugify(s: str) -> str:
     return out or "resource"
 
 
+def parse_prefixes_from_turtle(ttl_text: str) -> Set[str]:
+    """
+    Extract the prefix labels explicitly declared in the Turtle source via @prefix.
+    Example line: @prefix unit: <http://qudt.org/vocab/unit/> .
+    """
+    prefixes: Set[str] = set()
+    pat = re.compile(r"^\s*@prefix\s+([A-Za-z_][\w.-]*)\s*:\s*<[^>]+>\s*\.\s*$")
+    for line in ttl_text.splitlines():
+        m = pat.match(line)
+        if m:
+            prefixes.add(m.group(1))
+    return prefixes
+
+
 def try_curie_parts(g: Graph, uri: URIRef) -> Optional[Tuple[str, str, str]]:
     try:
         prefix, namespace, local = g.namespace_manager.compute_qname(uri)
@@ -154,17 +167,25 @@ def try_curie_parts(g: Graph, uri: URIRef) -> Optional[Tuple[str, str, str]]:
         return None
 
 
-def render_uri(g: Graph, uri: URIRef) -> str:
+def render_uri(g: Graph, uri: URIRef, file_prefixes: Set[str]) -> str:
+    """
+    Unified rule for predicates and objects:
+    - If URI can be shown as CURIE using a prefix declared in the file:
+        display CURIE, href = expanded URI
+    - Else:
+        display full URI, href = full URI
+    """
     parts = try_curie_parts(g, uri)
     if parts:
         prefix, namespace, local = parts
-        curie = f"{prefix}:{local}"
-        curie_esc = html.escape(curie)
-        if prefix in QUDT_LINK_PREFIXES:
-            href = html.escape(namespace + local)
+        if prefix in file_prefixes:
+            curie = f"{prefix}:{local}"
+            curie_esc = html.escape(curie)
+            href = html.escape(namespace + local, quote=True)
             return f"<a href='{href}'><code>{curie_esc}</code></a>"
-        return f"<code>{curie_esc}</code>"
-    return f"<code>{html.escape(str(uri))}</code>"
+
+    full = str(uri)
+    return f"<a href='{html.escape(full, quote=True)}'>{html.escape(full, quote=False)}</a>"
 
 
 def render_bnode(bn: BNode) -> str:
@@ -286,35 +307,6 @@ def render_literal(g: Graph, lit: Literal) -> str:
     return content
 
 
-def render_term(g: Graph, term: Any) -> str:
-    if isinstance(term, URIRef):
-        return render_uri(g, term)
-    if isinstance(term, BNode):
-        return render_bnode(term)
-    if isinstance(term, Literal):
-        return render_literal(g, term)
-    return html.escape(str(term))
-
-
-def link_if_internal_subject(g: Graph, term: Any) -> str:
-    if isinstance(term, URIRef):
-        parts = try_curie_parts(g, term)
-        if parts and parts[0] in QUDT_LINK_PREFIXES:
-            return render_uri(g, term)
-
-        if (term, None, None) in g:
-            href = f"{slugify(str(term))}.html"
-            label = render_uri(g, term)
-            return f"<a href='{html.escape(href)}'>{label}</a>"
-        return render_uri(g, term)
-
-    return render_term(g, term)
-
-
-def sort_key_term(term: Any) -> str:
-    return str(term)
-
-
 def iter_subjects(g: Graph) -> Iterable[URIRef]:
     seen: set[URIRef] = set()
     for s in g.subjects():
@@ -323,34 +315,180 @@ def iter_subjects(g: Graph) -> Iterable[URIRef]:
             yield s
 
 
-def expand_factor_unit_bnode(g: Graph, bnode: BNode) -> list[Tuple[str, str]]:
+def render_numeric_token(text: str) -> str:
+    return f"<span class='lit'>{html.escape(text, quote=False)}</span>"
+
+
+def scan_authoritative_numeric_literals(ttl_text: str) -> Dict[str, Dict[str, str]]:
+    """
+    Extract exact unquoted numeric tokens keyed by (synthetic-subject-token, predicate-token).
+
+    - Top-level subject token is the first token on a subject line (QName or <IRI>).
+    - Each qudt:hasFactorUnit [ ... ] block is assigned a synthetic token:
+        <outer-subject>::fu1, ::fu2, ...
+      so exponent values don't overwrite each other.
+    """
+    mapping: Dict[str, Dict[str, str]] = {}
+
+    pred_re = r"(?P<pred>(?:[A-Za-z_][\w.-]*:[\w.-]+)|(?:<[^>]+>))"
+    num_re = r"(?P<num>[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?)"
+    pat = re.compile(rf"\b{pred_re}\b[ \t]+{num_re}\s*(?=[;,.])")
+
+    in_multiline = False
+    outer_subject: Optional[str] = None
+    current_subject: Optional[str] = None
+
+    in_factor_unit = False
+    fu_counter = 0
+    fu_depth = 0
+
+    def update_multiline_state(line: str) -> None:
+        nonlocal in_multiline
+        cnt = line.count('"""')
+        if cnt % 2 == 1:
+            in_multiline = not in_multiline
+
+    for raw_line in ttl_text.splitlines():
+        line = raw_line.rstrip("\n")
+
+        if not in_multiline:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and not stripped.startswith("@"):
+                if not line[:1].isspace():
+                    parts = line.split()
+                    if parts:
+                        outer_subject = parts[0]
+                        current_subject = outer_subject
+                        in_factor_unit = False
+                        fu_counter = 0
+                        fu_depth = 0
+
+        if not in_multiline and outer_subject:
+            if "qudt:hasFactorUnit" in line and "[" in line:
+                fu_counter += 1
+                in_factor_unit = True
+                fu_depth = line.count("[") - line.count("]")
+                current_subject = f"{outer_subject}::fu{fu_counter}"
+            elif in_factor_unit:
+                fu_depth += line.count("[") - line.count("]")
+                if fu_depth <= 0:
+                    in_factor_unit = False
+                    current_subject = outer_subject
+
+        if current_subject:
+            for m in pat.finditer(line):
+                pred = m.group("pred")
+                num = m.group("num")
+                mapping.setdefault(current_subject, {})[pred] = num
+
+        update_multiline_state(line)
+
+    return mapping
+
+
+def subject_token_variants(g: Graph, s: URIRef) -> Tuple[str, str]:
+    qname = ""
+    parts = try_curie_parts(g, s)
+    if parts:
+        qname = f"{parts[0]}:{parts[2]}"
+    iri = f"<{str(s)}>"
+    return qname, iri
+
+
+def predicate_token_variants(g: Graph, p: URIRef) -> Tuple[str, str]:
+    qname = ""
+    parts = try_curie_parts(g, p)
+    if parts:
+        qname = f"{parts[0]}:{parts[2]}"
+    iri = f"<{str(p)}>"
+    return qname, iri
+
+
+def build_factor_unit_bnode_keys(g: Graph, subject: URIRef) -> Dict[BNode, str]:
+    subj_qname, subj_iri = subject_token_variants(g, subject)
+    subj_key = subj_qname or subj_iri
+
+    mapping: Dict[BNode, str] = {}
+    i = 0
+    for o in g.objects(subject, QUDT.hasFactorUnit):
+        if isinstance(o, BNode):
+            i += 1
+            mapping[o] = f"{subj_key}::fu{i}"
+    return mapping
+
+
+def lookup_authoritative_numeric(
+    auth_nums: Dict[str, Dict[str, str]],
+    subj_key: str,
+    pred_keys: Tuple[str, str],
+) -> Optional[str]:
+    if subj_key in auth_nums:
+        for pk in pred_keys:
+            if pk and pk in auth_nums[subj_key]:
+                return auth_nums[subj_key][pk]
+    return None
+
+
+def render_object_value(
+    g: Graph,
+    subject_key: str,
+    file_prefixes: Set[str],
+    p: URIRef,
+    o: Any,
+    auth_nums: Dict[str, Dict[str, str]],
+) -> str:
+    if isinstance(o, Literal):
+        pred_qname, pred_iri = predicate_token_variants(g, p)
+        token = lookup_authoritative_numeric(auth_nums, subject_key, (pred_qname, pred_iri))
+        if token is not None:
+            return render_numeric_token(token)
+        return render_literal(g, o)
+
+    if isinstance(o, URIRef):
+        return render_uri(g, o, file_prefixes)
+
+    if isinstance(o, BNode):
+        return render_bnode(o)
+
+    return html.escape(str(o))
+
+
+def expand_factor_unit_bnode(
+    g: Graph,
+    bnode: BNode,
+    bnode_subject_key: str,
+    file_prefixes: Set[str],
+    auth_nums: Dict[str, Dict[str, str]],
+) -> list[Tuple[str, str]]:
     rows: list[Tuple[str, str]] = []
-    for p2, o2 in sorted(
-        g.predicate_objects(bnode),
-        key=lambda t: (sort_key_term(t[0]), sort_key_term(t[1])),
-    ):
-        p2_disp = f"↳ {render_term(g, p2)}"
-        o2_disp = link_if_internal_subject(g, o2)
-        rows.append((p2_disp, o2_disp))
+    for p2, o2 in g.predicate_objects(bnode):
+        p2_disp = render_uri(g, p2, file_prefixes)
+        o2_disp = render_object_value(g, bnode_subject_key, file_prefixes, p2, o2, auth_nums)
+        rows.append((f"↳ {p2_disp}", o2_disp))
     return rows
 
 
-def subject_rows_with_double_hop(g: Graph, subject: URIRef) -> list[Tuple[str, str]]:
+def subject_rows_with_double_hop(
+    g: Graph,
+    subject: URIRef,
+    file_prefixes: Set[str],
+    auth_nums: Dict[str, Dict[str, str]],
+) -> list[Tuple[str, str]]:
     rows: list[Tuple[str, str]] = []
 
-    po_list = sorted(
-        g.predicate_objects(subject),
-        key=lambda t: (sort_key_term(t[0]), sort_key_term(t[1])),
-    )
+    subj_qname, subj_iri = subject_token_variants(g, subject)
+    subj_key = subj_qname or subj_iri
+    fu_keys = build_factor_unit_bnode_keys(g, subject)
 
-    for p, o in po_list:
-        p_disp = render_term(g, p)
+    for p, o in g.predicate_objects(subject):
+        p_disp = render_uri(g, p, file_prefixes)
 
         if p == QUDT.hasFactorUnit and isinstance(o, BNode):
-            rows.append((p_disp, ""))
-            rows.extend(expand_factor_unit_bnode(g, o))
+            rows.append((p_disp, ""))  # hide bnode id
+            bnode_key = fu_keys.get(o, f"{subj_key}::fu?")
+            rows.extend(expand_factor_unit_bnode(g, o, bnode_key, file_prefixes, auth_nums))
         else:
-            rows.append((p_disp, link_if_internal_subject(g, o)))
+            rows.append((p_disp, render_object_value(g, subj_key, file_prefixes, p, o, auth_nums)))
 
     return rows
 
@@ -374,9 +512,9 @@ def is_deprecated(g: Graph, s: URIRef) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Generate per-resource static HTML pages from RDF.")
-    ap.add_argument("input", help="Input RDF file (Turtle, RDF/XML, JSON-LD, N-Triples, etc.)")
-    ap.add_argument("--format", default=None, help="Optional RDFLib parser format (e.g., turtle, xml, json-ld)")
+    ap = argparse.ArgumentParser(description="Generate per-resource static HTML pages from Turtle RDF.")
+    ap.add_argument("input", help="Input Turtle RDF file")
+    ap.add_argument("--format", default=None, help="Optional RDFLib parser format (default: autodetect)")
     ap.add_argument("--out", default="site", help="Output directory for static HTML")
     ap.add_argument("--title", default="RDF Index", help="Title for the index page")
     args = ap.parse_args()
@@ -385,32 +523,40 @@ def main() -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    ttl_text = inp.read_text(encoding="utf-8")
+    file_prefixes = parse_prefixes_from_turtle(ttl_text)
+    auth_nums = scan_authoritative_numeric_literals(ttl_text)
+
     g = Graph()
     g.parse(str(inp), format=args.format)
 
-    env = Environment(
-        loader=BaseLoader(),
-        autoescape=select_autoescape(enabled_extensions=("html", "xml")),
-    )
+    env = Environment(loader=BaseLoader(), autoescape=select_autoescape(enabled_extensions=("html", "xml")))
     page_t = env.from_string(PAGE_TMPL)
     index_t = env.from_string(INDEX_TMPL)
 
     subjects = list(iter_subjects(g))
 
     for s in subjects:
-        triples = subject_rows_with_double_hop(g, s)
-        types = [render_term(g, t) for t in g.objects(s, RDF.type)]
-        subject_display = render_term(g, s)
+        triples = subject_rows_with_double_hop(g, s, file_prefixes, auth_nums)
+        types = []
+        for t in g.objects(s, RDF.type):
+            if isinstance(t, URIRef):
+                types.append(render_uri(g, t, file_prefixes))
+            else:
+                types.append(html.escape(str(t)))
 
-        filename = out_dir / f"{slugify(str(s))}.html"
-        html_out = page_t.render(
-            title=str(s),
-            subject_display=subject_display,
-            types=types,
-            triples=triples,
-            index_href="index.html",
+        subject_display = render_uri(g, s, file_prefixes)
+
+        (out_dir / f"{slugify(str(s))}.html").write_text(
+            page_t.render(
+                title=str(s),
+                subject_display=subject_display,
+                types=types,
+                triples=triples,
+                index_href="index.html",
+            ),
+            encoding="utf-8",
         )
-        filename.write_text(html_out, encoding="utf-8")
 
     items = []
     for s in subjects:
@@ -419,8 +565,6 @@ def main() -> int:
         curie = f"{parts[0]}:{parts[2]}" if parts else str(s)
         label = best_label_for_subject(g, s)
         deprecated = is_deprecated(g, s)
-
-        # Key is used for filtering; template appends " deprecated" when applicable.
         key = (curie + " " + label).lower()
 
         items.append(
@@ -435,8 +579,10 @@ def main() -> int:
 
     items.sort(key=lambda it: it["key"])
 
-    index_html = index_t.render(title=args.title, count=len(items), items=items)
-    (out_dir / "index.html").write_text(index_html, encoding="utf-8")
+    (out_dir / "index.html").write_text(
+        index_t.render(title=args.title, count=len(items), items=items),
+        encoding="utf-8",
+    )
 
     print(f"Wrote {len(subjects)} pages + index to: {out_dir.resolve()}")
     return 0
