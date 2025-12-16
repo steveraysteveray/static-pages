@@ -7,13 +7,11 @@ from pathlib import Path
 from typing import Iterable, Tuple, Any, Optional
 
 from rdflib import Graph, URIRef, BNode, Literal, Namespace
-from rdflib.namespace import RDF
+from rdflib.namespace import RDF, RDFS, XSD
 from jinja2 import Environment, BaseLoader, select_autoescape
 
 QUDT = Namespace("http://qudt.org/schema/qudt/")
 
-# Prefixes that should hyperlink to qudt.org with content negotiation.
-# (e.g., unit:M -> https://qudt.org/vocab/unit/M)
 QUDT_LINK_PREFIXES = {"unit", "qkdv", "quantitykind", "qudt", "sou"}
 
 
@@ -33,7 +31,6 @@ PAGE_TMPL = """<!doctype html>
         processEscapes: true
       },
       options: {
-        // IMPORTANT: do NOT skip table cell tags so math in cells gets processed
         skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
       }
     };
@@ -53,8 +50,6 @@ PAGE_TMPL = """<!doctype html>
     .bnode { color: #444; }
     .lit { color: #111; }
     .small { font-size: 0.9rem; color: #666; }
-
-    /* Preserve line breaks in long literals */
     .prewrap { white-space: pre-wrap; }
   </style>
 </head>
@@ -98,9 +93,11 @@ INDEX_TMPL = """<!doctype html>
     body { font-family: Calibri, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
     input { width: 100%; padding: 0.6rem; font-size: 1rem; margin: 1rem 0; }
     ul { padding-left: 1.2rem; }
-    li { margin: 0.25rem 0; }
+    li { margin: 0.35rem 0; }
     .meta { color:#555; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .curie { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .label { color:#333; margin-left: 0.5rem; }
+    .deprecated { color:#8a2c2c; margin-left: 0.5rem; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -111,7 +108,11 @@ INDEX_TMPL = """<!doctype html>
 
 <ul id="list">
 {% for item in items %}
-  <li data-key="{{ item.key }}"><a href="{{ item.href }}">{{ item.label }}</a></li>
+  <li data-key="{{ item.key }}{% if item.deprecated %} deprecated{% endif %}">
+    <a href="{{ item.href }}"><span class="curie">{{ item.curie }}</span></a>
+    {% if item.label %}<span class="label">{{ item.label }}</span>{% endif %}
+    {% if item.deprecated %}<span class="deprecated">Deprecated</span>{% endif %}
+  </li>
 {% endfor %}
 </ul>
 
@@ -146,7 +147,6 @@ def slugify(s: str) -> str:
 
 
 def try_curie_parts(g: Graph, uri: URIRef) -> Optional[Tuple[str, str, str]]:
-    """Return (prefix, namespace, localname) if graph can compute a QName, else None."""
     try:
         prefix, namespace, local = g.namespace_manager.compute_qname(uri)
         return prefix, str(namespace), local
@@ -155,23 +155,15 @@ def try_curie_parts(g: Graph, uri: URIRef) -> Optional[Tuple[str, str, str]]:
 
 
 def render_uri(g: Graph, uri: URIRef) -> str:
-    """
-    Render a URIRef as a <code>curie</code> if possible; if its prefix is in
-    QUDT_LINK_PREFIXES, link to the expanded URI (namespace + local) so qudt.org
-    content negotiation can serve HTML.
-    """
     parts = try_curie_parts(g, uri)
     if parts:
         prefix, namespace, local = parts
         curie = f"{prefix}:{local}"
         curie_esc = html.escape(curie)
-
         if prefix in QUDT_LINK_PREFIXES:
             href = html.escape(namespace + local)
             return f"<a href='{href}'><code>{curie_esc}</code></a>"
-
         return f"<code>{curie_esc}</code>"
-
     return f"<code>{html.escape(str(uri))}</code>"
 
 
@@ -208,43 +200,21 @@ def looks_like_latex(s: str) -> bool:
 
 
 def is_qudt_latex_string(g: Graph, lit: Literal) -> bool:
-    """
-    True when datatype looks like qudt:LatexString (by QName localname),
-    even if the prefix mapping differs.
-    """
     if not lit.datatype:
         return False
-    try:
-        dt_uri = URIRef(lit.datatype)
-        parts = try_curie_parts(g, dt_uri)
-        if parts and parts[2] == "LatexString":
-            return True
-        # fallback: URI localname
-        return str(dt_uri).rstrip("/#").endswith("LatexString")
-    except Exception:
-        return False
+    dt_uri = URIRef(lit.datatype)
+    parts = try_curie_parts(g, dt_uri)
+    if parts and parts[2] == "LatexString":
+        return True
+    return str(dt_uri).rstrip("/#").endswith("LatexString")
 
 
 def convert_dollar_math_to_mathjax(s: str) -> str:
-    """
-    Convert embedded $...$ and $$...$$ segments inside an arbitrary string into
-    MathJax-safe delimiters \\(...\\) and \\[...\\], removing the dollar signs.
-
-    This handles the unit:A style strings where LaTeX is mixed with prose, e.g.:
-      "... defined as: $$A = C/s = ...$$ Note that ..."
-
-    Rules:
-    - $$...$$ -> \\[...\\]
-    - $...$   -> \\(...\\)
-    - Backslash-escaped dollars (\\$) are left alone.
-    - If a delimiter is unmatched, we leave it as literal '$' text.
-    """
     out: list[str] = []
     i = 0
     n = len(s)
 
     def is_escaped(pos: int) -> bool:
-        # count preceding backslashes
         k = pos - 1
         bs = 0
         while k >= 0 and s[k] == "\\":
@@ -254,7 +224,6 @@ def convert_dollar_math_to_mathjax(s: str) -> str:
 
     while i < n:
         if s[i] == "$" and not is_escaped(i):
-            # $$ display?
             if i + 1 < n and s[i + 1] == "$" and not is_escaped(i + 1):
                 j = i + 2
                 while j + 1 < n:
@@ -265,12 +234,10 @@ def convert_dollar_math_to_mathjax(s: str) -> str:
                         break
                     j += 1
                 else:
-                    # no closing $$ found
                     out.append("$")
                     i += 1
                 continue
 
-            # $ inline
             j = i + 1
             while j < n:
                 if s[j] == "$" and not is_escaped(j):
@@ -280,7 +247,6 @@ def convert_dollar_math_to_mathjax(s: str) -> str:
                     break
                 j += 1
             else:
-                # no closing $ found
                 out.append("$")
                 i += 1
             continue
@@ -291,31 +257,33 @@ def convert_dollar_math_to_mathjax(s: str) -> str:
     return "".join(out)
 
 
+def _is_true_literal(lit: Literal) -> bool:
+    if isinstance(lit.value, bool):
+        return bool(lit.value)
+    s = str(lit).strip().lower()
+    return s in {"true", "1", "yes"} or s == "true^^xsd:boolean"
+
+
 def render_literal(g: Graph, lit: Literal) -> str:
     raw = str(lit)
 
-    # If it’s explicitly typed as LatexString (QUDT), treat it as “prose + embedded math”.
+    if lit.datatype and URIRef(lit.datatype) == XSD.anyURI:
+        href = html.escape(raw, quote=True)
+        text = html.escape(raw, quote=False)
+        return f"<a href='{href}' class='prewrap'>{text}</a>"
+
     if is_qudt_latex_string(g, lit) or looks_like_latex(raw):
-        # Convert embedded $...$ / $$...$$ to MathJax delimiters so the $ never shows.
         converted = convert_dollar_math_to_mathjax(raw)
-
-        # Escape HTML but keep backslashes etc. (html.escape does not touch backslashes)
         converted_esc = html.escape(converted, quote=False)
-
-        # IMPORTANT: don't wrap the whole thing in math mode; leave it as prose
-        # containing \\(...\\) and \\[...\\] segments for MathJax to process.
         content = f"<span class='lit prewrap'>{converted_esc}</span>"
     else:
         txt = html.escape(raw, quote=False)
         content = f"<span class='lit prewrap'>“{txt}”</span>"
 
-    extras = ""
     if lit.language:
-        extras += f"@{html.escape(lit.language)}"
-    if lit.datatype:
-        extras += f"^^{render_uri(g, URIRef(lit.datatype))}"
+        content += f"<span class='small'>@{html.escape(lit.language)}</span>"
 
-    return content + extras
+    return content
 
 
 def render_term(g: Graph, term: Any) -> str:
@@ -329,10 +297,6 @@ def render_term(g: Graph, term: Any) -> str:
 
 
 def link_if_internal_subject(g: Graph, term: Any) -> str:
-    """
-    For URIRefs that are subjects *in this graph*, link to the local generated
-    HTML page. For QUDT-related prefixes we prefer qudt.org external links.
-    """
     if isinstance(term, URIRef):
         parts = try_curie_parts(g, term)
         if parts and parts[0] in QUDT_LINK_PREFIXES:
@@ -352,7 +316,6 @@ def sort_key_term(term: Any) -> str:
 
 
 def iter_subjects(g: Graph) -> Iterable[URIRef]:
-    """Interpret “instance declarations” as URI subjects that have at least one triple."""
     seen: set[URIRef] = set()
     for s in g.subjects():
         if isinstance(s, URIRef) and s not in seen:
@@ -361,10 +324,6 @@ def iter_subjects(g: Graph) -> Iterable[URIRef]:
 
 
 def expand_factor_unit_bnode(g: Graph, bnode: BNode) -> list[Tuple[str, str]]:
-    """
-    One-hop expansion of qudt:hasFactorUnit blank node triples.
-    Display these rows with an arrow prefix on the predicate.
-    """
     rows: list[Tuple[str, str]] = []
     for p2, o2 in sorted(
         g.predicate_objects(bnode),
@@ -377,10 +336,6 @@ def expand_factor_unit_bnode(g: Graph, bnode: BNode) -> list[Tuple[str, str]]:
 
 
 def subject_rows_with_double_hop(g: Graph, subject: URIRef) -> list[Tuple[str, str]]:
-    """
-    All triples for subject, plus “double-hop” rows for qudt:hasFactorUnit bnodes.
-    For qudt:hasFactorUnit itself, leave the object cell blank (hide bnode id).
-    """
     rows: list[Tuple[str, str]] = []
 
     po_list = sorted(
@@ -392,12 +347,30 @@ def subject_rows_with_double_hop(g: Graph, subject: URIRef) -> list[Tuple[str, s
         p_disp = render_term(g, p)
 
         if p == QUDT.hasFactorUnit and isinstance(o, BNode):
-            rows.append((p_disp, ""))  # hide _:bnode
+            rows.append((p_disp, ""))
             rows.extend(expand_factor_unit_bnode(g, o))
         else:
             rows.append((p_disp, link_if_internal_subject(g, o)))
 
     return rows
+
+
+def best_label_for_subject(g: Graph, s: URIRef) -> str:
+    labels = [o for o in g.objects(s, RDFS.label) if isinstance(o, Literal)]
+    for lit in labels:
+        if (lit.language or "").lower() == "en":
+            return str(lit)
+    for lit in labels:
+        if lit.language is None:
+            return str(lit)
+    return ""
+
+
+def is_deprecated(g: Graph, s: URIRef) -> bool:
+    for o in g.objects(s, QUDT.deprecated):
+        if isinstance(o, Literal) and _is_true_literal(o):
+            return True
+    return False
 
 
 def main() -> int:
@@ -424,7 +397,6 @@ def main() -> int:
 
     subjects = list(iter_subjects(g))
 
-    # Per-subject pages
     for s in subjects:
         triples = subject_rows_with_double_hop(g, s)
         types = [render_term(g, t) for t in g.objects(s, RDF.type)]
@@ -440,19 +412,27 @@ def main() -> int:
         )
         filename.write_text(html_out, encoding="utf-8")
 
-    # Index page (alphabetical)
     items = []
     for s in subjects:
         href = f"{slugify(str(s))}.html"
         parts = try_curie_parts(g, s)
-        label = f"{parts[0]}:{parts[2]}" if parts else str(s)
+        curie = f"{parts[0]}:{parts[2]}" if parts else str(s)
+        label = best_label_for_subject(g, s)
+        deprecated = is_deprecated(g, s)
+
+        # Key is used for filtering; template appends " deprecated" when applicable.
+        key = (curie + " " + label).lower()
+
         items.append(
             {
                 "href": href,
+                "curie": html.escape(curie),
                 "label": html.escape(label),
-                "key": html.escape(label.lower()),
+                "deprecated": deprecated,
+                "key": html.escape(key),
             }
         )
+
     items.sort(key=lambda it: it["key"])
 
     index_html = index_t.render(title=args.title, count=len(items), items=items)
