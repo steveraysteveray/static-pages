@@ -696,122 +696,30 @@ def slugify(s: str) -> str:
     return out or "resource"
 
 
-def resolve_resource_uriref(g: Graph, resource: str, prefix_map: Dict[str, str]) -> Optional[URIRef]:
-    r = resource.strip()
-    if not r:
-        return None
-    if r.startswith("<") and r.endswith(">"):
-        return URIRef(r[1:-1])
-    if r.startswith("http://") or r.startswith("https://"):
-        return URIRef(r)
-    if ":" in r:
-        pfx, local = r.split(":", 1)
-        ns = prefix_map.get(pfx)
-        if ns:
-            return URIRef(ns + local)
-        # try rdflib qname resolution if the prefix was bound another way
-        try:
-            return URIRef(g.namespace_manager.expand_curie(r))
-        except Exception:
-            return None
-    return None
-
-
-def guess_ttl_path_for_resource(resource_uri: str, ttl_dir: Path) -> Path:
-    # Use last path segment or fragment as filename base
-    base = resource_uri
-    if base.startswith("<") and base.endswith(">"):
-        base = base[1:-1]
-    if "#" in base:
-        base = base.rsplit("#", 1)[-1]
-    else:
-        base = base.rstrip("/").rsplit("/", 1)[-1]
-    return ttl_dir / f"{base}.ttl"
-
-
-def generate_instance_html(
-    *,
-    ttl_path: Path,
-    resource: str,
-    output_path: Path,
-    index_href: str = "index.html",
-    gospel_max_depth: int = 4,
-    bnode_expand_depth: int = 2,
-    page_title: Optional[str] = None,
-) -> None:
-    ttl_text = ttl_path.read_text(encoding="utf-8")
-    prefix_map = parse_prefix_map_from_turtle(ttl_text)
-
-    g = Graph()
-    g.parse(str(ttl_path), format=None)
-    bind_prefix_map(g, prefix_map)
-
-    gospel = build_gospel_lexeme_map(g, ttl_text, prefix_map, max_depth=gospel_max_depth)
-
-    subj = resolve_resource_uriref(g, resource, prefix_map)
-
-    if subj is None or (subj, None, None) not in g:
-        # fallback: if this per-resource file contains exactly one URIRef subject, use it
-        uris = [s for s in subjects_in_graph(g) if isinstance(s, URIRef)]
-        if len(uris) == 1:
-            subj = uris[0]
-        elif subj is None:
-            raise SystemExit(f"Could not resolve --resource '{resource}' using prefixes in {ttl_path.name}")
-        else:
-            raise SystemExit(f"Resource '{resource}' not found in {ttl_path}")
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Generate per-resource static HTML pages from Turtle RDF.")
+    ap.add_argument("input", help="Input Turtle RDF file")
+    ap.add_argument("--format", default=None, help="Optional RDFLib parser format (default: autodetect)")
+    ap.add_argument("--out", default="site", help="Output directory for static HTML")
+    ap.add_argument("--title", default="RDF Index", help="Title for the index page")
+    ap.add_argument("--gospel-max-depth", type=int, default=4, help="Max predicate-path depth for gospel numeric matching")
+    ap.add_argument("--bnode-expand-depth", type=int, default=2, help="How many bnode hops to expand in HTML")
+    args = ap.parse_args()
 
     generated_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
 
-    env = Environment(loader=BaseLoader(), autoescape=select_autoescape(enabled_extensions=("html", "xml")))
-    page_t = env.from_string(PAGE_TMPL)
-
-    triples = subject_rows(g, subj, prefix_map, gospel, bnode_expand_depth=bnode_expand_depth)
-
-    types = []
-    for t in g.objects(subj, RDF.type):
-        if isinstance(t, URIRef):
-            types.append(render_uri(g, t, prefix_map))
-        else:
-            types.append(html.escape(str(t)))
-
-    subject_display = render_uri(g, subj, prefix_map)
-    title = page_title or str(subj)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        page_t.render(
-            title=title,
-            subject_display=subject_display,
-            types=types,
-            triples=triples,
-            index_href=index_href,
-            generated_at=generated_at,
-        ),
-        encoding="utf-8",
-    )
-
-
-def generate_site(
-    *,
-    input_path: Path,
-    out_dir: Path,
-    fmt: Optional[str],
-    title: str,
-    gospel_max_depth: int,
-    bnode_expand_depth: int,
-) -> None:
-    generated_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
-
+    inp = Path(args.input)
+    out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ttl_text = input_path.read_text(encoding="utf-8")
+    ttl_text = inp.read_text(encoding="utf-8")
     prefix_map = parse_prefix_map_from_turtle(ttl_text)
 
     g = Graph()
-    g.parse(str(input_path), format=fmt)
+    g.parse(str(inp), format=args.format)
     bind_prefix_map(g, prefix_map)
 
-    gospel = build_gospel_lexeme_map(g, ttl_text, prefix_map, max_depth=gospel_max_depth)
+    gospel = build_gospel_lexeme_map(g, ttl_text, prefix_map, max_depth=args.gospel_max_depth)
 
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(enabled_extensions=("html", "xml")))
     page_t = env.from_string(PAGE_TMPL)
@@ -820,7 +728,7 @@ def generate_site(
     subjects = subjects_in_graph(g)
 
     for s in subjects:
-        triples = subject_rows(g, s, prefix_map, gospel, bnode_expand_depth=bnode_expand_depth)
+        triples = subject_rows(g, s, prefix_map, gospel, bnode_expand_depth=args.bnode_expand_depth)
 
         types = []
         for t in g.objects(s, RDF.type):
@@ -873,113 +781,12 @@ def generate_site(
     items.sort(key=lambda it: it["key"])
 
     (out_dir / "index.html").write_text(
-        index_t.render(title=title, count=len(items), items=items, generated_at=generated_at),
+        index_t.render(title=args.title, count=len(items), items=items, generated_at=generated_at),
         encoding="utf-8",
     )
 
     print(f"Wrote {len(subjects)} pages + index to: {out_dir.resolve()}")
-
-
-def build_arg_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Generate static HTML from Turtle RDF (full site or single instance page).")
-    sub = ap.add_subparsers(dest="cmd")
-
-    # Full-site generation (previous default behavior)
-    site = sub.add_parser("site", help="Generate index + per-resource pages from one Turtle file")
-    site.add_argument("input", help="Input Turtle RDF file")
-    site.add_argument("--format", default=None, help="Optional RDFLib parser format (default: autodetect)")
-    site.add_argument("--out", default="site", help="Output directory for static HTML")
-    site.add_argument("--title", default="RDF Index", help="Title for the index page")
-    site.add_argument("--gospel-max-depth", type=int, default=4, help="Max predicate-path depth for gospel numeric matching")
-    site.add_argument("--bnode-expand-depth", type=int, default=2, help="How many bnode hops to expand in HTML")
-
-    # Single-instance page generation (used to replace lmdoc:Instance servlet calls)
-    inst = sub.add_parser("instance", help="Generate a single resource HTML page")
-    inst.add_argument("--graph", default=None, help="Graph URI (kept for compatibility with legacy servlet calls)")
-    inst.add_argument("--resource", required=True, help="Resource IRI or CURIE to render")
-    inst.add_argument("--output", required=True, help="Output HTML file path")
-    inst.add_argument(
-        "--input",
-        default=None,
-        help="Input Turtle file containing the resource. If omitted, the script will look for a per-resource file in --ttl-dir.",
-    )
-    inst.add_argument(
-        "--ttl-dir",
-        default=None,
-        help="Directory containing per-resource Turtle files named <localname>.ttl (default: env RDF_STATIC_SITE_TTL_DIR or current directory).",
-    )
-    inst.add_argument("--index-href", default="index.html", help="Href used for the 'Index' back-link in the page header")
-    inst.add_argument("--title", default=None, help="Optional HTML <title> override")
-    inst.add_argument("--gospel-max-depth", type=int, default=4, help="Max predicate-path depth for gospel numeric matching")
-    inst.add_argument("--bnode-expand-depth", type=int, default=2, help="How many bnode hops to expand in HTML")
-
-    return ap
-
-
-def main() -> int:
-    import sys
-
-    ap = build_arg_parser()
-
-    argv = sys.argv[1:]
-    # Backward compatibility: old usage was `rdf_static_site.py <input.ttl> [--out ...]`
-    if argv and argv[0] not in {"site", "instance"}:
-        argv = ["site"] + argv
-
-    args = ap.parse_args(argv)
-
-    if args.cmd is None:
-        ap.print_help()
-        return 2
-
-    if args.cmd == "site":
-        generate_site(
-            input_path=Path(args.input),
-            out_dir=Path(args.out),
-            fmt=args.format,
-            title=args.title,
-            gospel_max_depth=args.gospel_max_depth,
-            bnode_expand_depth=args.bnode_expand_depth,
-        )
-        return 0
-
-    if args.cmd == "instance":
-        output_path = Path(args.output)
-
-        if args.input:
-            ttl_path = Path(args.input)
-        else:
-            ttl_dir = (
-                Path(args.ttl_dir)
-                if args.ttl_dir
-                else Path((__import__("os").environ.get("RDF_STATIC_SITE_TTL_DIR") or "."))
-            )
-            # If resource is CURIE, we need a concrete URI to guess the filename. Use a minimal guess based on the token.
-            # We'll first try "<localname>.ttl" where localname is everything after ':' or last '/'.
-            r = args.resource.strip()
-            if ":" in r and not (r.startswith("http://") or r.startswith("https://") or (r.startswith("<") and r.endswith(">"))):
-                localname = r.split(":", 1)[1]
-                ttl_path = ttl_dir / f"{localname}.ttl"
-            else:
-                ttl_path = guess_ttl_path_for_resource(r, ttl_dir)
-
-        if not ttl_path.exists():
-            raise SystemExit(f"TTL source not found: {ttl_path} (set --input or --ttl-dir or RDF_STATIC_SITE_TTL_DIR)")
-
-        generate_instance_html(
-            ttl_path=ttl_path,
-            resource=args.resource,
-            output_path=output_path,
-            index_href=args.index_href,
-            gospel_max_depth=args.gospel_max_depth,
-            bnode_expand_depth=args.bnode_expand_depth,
-            page_title=args.title,
-        )
-        print(f"Wrote: {output_path.resolve()}")
-        return 0
-
-    ap.print_help()
-    return 2
+    return 0
 
 
 if __name__ == "__main__":
