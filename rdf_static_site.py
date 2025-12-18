@@ -6,14 +6,17 @@ import html
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jinja2 import BaseLoader, Environment, select_autoescape
 from rdflib import BNode, Graph, Literal, Namespace, URIRef
 from rdflib.namespace import RDF, RDFS, XSD
 
 QUDT = Namespace("http://qudt.org/schema/qudt/")
+DCTERMS = Namespace("http://purl.org/dc/terms/")
 
 # -----------------------------
 # HTML templates
@@ -53,6 +56,7 @@ PAGE_TMPL = """<!doctype html>
     a:hover { text-decoration: underline; }
     .small { font-size: 0.9rem; color: #666; }
     .prewrap { white-space: pre-wrap; }
+    .tiny { font-size: 0.75rem; color: #888; margin-top: 2rem; }
   </style>
 </head>
 <body>
@@ -81,6 +85,8 @@ PAGE_TMPL = """<!doctype html>
   {% endfor %}
   </tbody>
 </table>
+
+<div class="tiny">Generated {{ generated_at }}</div>
 </body>
 </html>
 """
@@ -100,6 +106,8 @@ INDEX_TMPL = """<!doctype html>
     .curie { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .label { color:#333; margin-left: 0.5rem; }
     .deprecated { color:#8a2c2c; margin-left: 0.5rem; font-weight: 600; }
+    .replacement { color:#8a2c2c; margin-left: 0.25rem; font-weight: 600; }
+    .tiny { font-size: 0.75rem; color: #888; margin-top: 2rem; }
   </style>
 </head>
 <body>
@@ -113,10 +121,14 @@ INDEX_TMPL = """<!doctype html>
   <li data-key="{{ item.key }}{% if item.deprecated %} deprecated{% endif %}">
     <a href="{{ item.href }}"><span class="curie">{{ item.curie }}</span></a>
     {% if item.label %}<span class="label">{{ item.label }}</span>{% endif %}
-    {% if item.deprecated %}<span class="deprecated">Deprecated</span>{% endif %}
+    {% if item.deprecated %}
+      <span class="deprecated">Deprecated</span>{% if item.replaced_by_html %}<span class="replacement">, use {{ item.replaced_by_html|safe }}</span>{% endif %}
+    {% endif %}
   </li>
 {% endfor %}
 </ul>
+
+<div class="tiny">Generated {{ generated_at }}</div>
 
 <script>
   const q = document.getElementById('q');
@@ -179,6 +191,18 @@ def render_uri(g: Graph, uri: URIRef, prefix_map: Dict[str, str]) -> str:
     return f"<a href='{html.escape(full, quote=True)}'>{html.escape(full, quote=False)}</a>"
 
 
+def linkified_curie_or_iri(g: Graph, uri: URIRef, prefix_map: Dict[str, str]) -> str:
+    parts = try_curie_parts(g, uri, prefix_map)
+    href = str(uri)
+    if parts and parts[0] in prefix_map:
+        display = f"{parts[0]}:{parts[2]}"
+        return (
+            f"<a href='{html.escape(href, quote=True)}'>"
+            f"<span class='curie'>{html.escape(display, quote=False)}</span></a>"
+        )
+    return f"<a href='{html.escape(href, quote=True)}'>{html.escape(href, quote=False)}</a>"
+
+
 # -----------------------------
 # LaTeX rendering support
 # -----------------------------
@@ -204,7 +228,6 @@ def is_qudt_latex_string(g: Graph, lit: Literal, prefix_map: Dict[str, str]) -> 
 
 
 def convert_dollar_math_to_mathjax(s: str) -> str:
-    # Convert $...$ to \( ... \) and $$...$$ to \[ ... \] (preserve newlines)
     out: list[str] = []
     i = 0
     n = len(s)
@@ -254,62 +277,129 @@ def convert_dollar_math_to_mathjax(s: str) -> str:
 # “Gospel numeric” capture
 # -----------------------------
 
-NUMERIC_LEX_RE = re.compile(r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?")
+NUMERIC_TOKEN_RE = re.compile(r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?")
 
-# We will scan numeric lexemes *only* in positions that look like Turtle object positions.
-# But we do NOT attempt to fully parse Turtle. We just record a conservative set of candidates.
+_NUMERIC_DT_URIS = {
+    str(XSD.integer),
+    str(XSD.decimal),
+    str(XSD.double),
+    str(XSD.float),
+}
+
+
+def _decimal_or_none(s: str) -> Optional[Decimal]:
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+NumericSig = Tuple[str, str, Union[int, Tuple[int, Tuple[int, ...], int], str]]
+# (datatype_uri_str, kind, value)
+#   kind: "int" -> int
+#         "decimal" -> Decimal.as_tuple()
+#         "float" -> float.hex() string
+
+
+def literal_numeric_signature(lit: Literal) -> Optional[NumericSig]:
+    dt = str(lit.datatype) if lit.datatype else ""
+    if dt and dt not in _NUMERIC_DT_URIS:
+        return None
+
+    py = lit.toPython()
+    # exclude bool (bool is subclass of int)
+    if isinstance(py, bool):
+        return None
+    if isinstance(py, int):
+        return (dt, "int", py)
+    if isinstance(py, Decimal):
+        return (dt, "decimal", py.as_tuple())
+    if isinstance(py, float):
+        return (dt, "float", py.hex())
+
+    # fallback: if it looks numeric, treat as decimal signature by parsing its string
+    lex = str(lit).strip()
+    if not NUMERIC_TOKEN_RE.fullmatch(lex):
+        return None
+    d = _decimal_or_none(lex)
+    if d is None:
+        return None
+    return (dt, "decimal", d.as_tuple())
+
+
+def occ_matches_literal(occ_lexeme: str, lit: Literal) -> bool:
+    """
+    Decide whether a numeric lexeme from the file corresponds to an rdflib Literal.
+    Handles float-rounding cases by matching using float(Decimal(lexeme)) when lit.toPython() is float.
+    """
+    d = _decimal_or_none(occ_lexeme)
+    if d is None:
+        return False
+
+    py = lit.toPython()
+    if isinstance(py, bool):
+        return False
+    if isinstance(py, int):
+        # only match if lexeme is integral
+        try:
+            return d == d.to_integral_value() and int(d) == py
+        except Exception:
+            return False
+    if isinstance(py, Decimal):
+        return py == d
+    if isinstance(py, float):
+        try:
+            return py == float(d)
+        except Exception:
+            return False
+
+    # fallback (string-based) last resort
+    try:
+        return _decimal_or_none(str(lit).strip()) == d
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
 class NumericOccurrence:
-    subject_token: str         # top-level subject token as it appears in the file (e.g., unit:A-PER-A-HR)
-    pred_token: str            # predicate token as it appears in the file (e.g., qudt:exponent)
-    lexeme: str                # exact numeric token (e.g., -2, 2.777E-4)
-    bnode_depth: int           # nesting depth of [ ... ] at that point
-    line_no: int               # for stable ordering
-
-
-@dataclass(frozen=True)
-class PathKey:
-    subject: URIRef
-    path: Tuple[URIRef, ...]   # predicates from subject to the literal
+    subject_token: str
+    pred_token: str
+    lexeme: str
+    bnode_depth: int
+    line_no: int
 
 
 def scan_numeric_occurrences(ttl_text: str) -> List[NumericOccurrence]:
     """
     Conservative scanner:
-      - respects long-string delimiters so we don't read numbers inside long strings
-      - tracks bracket depth to know whether we're inside a bnode block
-      - identifies triples' subject token by looking for non-indented subject starts
-      - captures numeric objects in "pred <ws> NUM [;,.]" patterns (as text)
+      - ignores numbers inside triple-double-quote and triple-single-quote blocks
+      - tracks current top-level subject token
+      - finds: predicate <ws> numeric  followed by ; , or .
     """
     occurrences: List[NumericOccurrence] = []
 
-    # predicate token (CURIE or <IRI>)
     pred_re = r"(?P<pred>(?:[A-Za-z_][\w.-]*:[\w.-]+)|(?:<[^>]+>))"
     num_re = r"(?P<num>[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?)"
-    # only accept if followed by ; , or . (end of object)
     pat = re.compile(rf"\b{pred_re}\b[ \t]+{num_re}\s*(?=[;,.])")
 
-    # long string state (either delimiter)
     delim: Optional[str] = None
-
     bracket_depth = 0
     current_subject: Optional[str] = None
 
     for idx, raw in enumerate(ttl_text.splitlines(), start=1):
         line = raw.rstrip("\n")
 
-        # update delimiter state
-        # (toggle only on the delimiter we entered with)
+        in_before = delim is not None
+
+        # toggle long-string state (triple quotes)
         i = 0
         while i < len(line):
             next_d = None
             next_pos = None
-            for d in ('"""', "'''"):
-                pos = line.find(d, i)
+            for dmark in ('"""', "'''"):
+                pos = line.find(dmark, i)
                 if pos != -1 and (next_pos is None or pos < next_pos):
-                    next_d, next_pos = d, pos
+                    next_d, next_pos = dmark, pos
             if next_d is None or next_pos is None:
                 break
             if delim is None:
@@ -318,22 +408,20 @@ def scan_numeric_occurrences(ttl_text: str) -> List[NumericOccurrence]:
                 delim = None
             i = next_pos + 3
 
-        in_long_string = delim is not None
+        in_after = delim is not None
+        line_in_long_string = in_before or in_after
 
-        # subject detection only when not in long string and at top-level (not indented)
-        if not in_long_string:
+        if not line_in_long_string:
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and not stripped.startswith("@"):
                 if not line[:1].isspace():
-                    # likely a subject start
                     current_subject = stripped.split()[0]
 
-        # update bracket depth (only when not in long string)
-        if not in_long_string:
+        if not line_in_long_string:
             bracket_depth += line.count("[")
             bracket_depth -= line.count("]")
 
-        if in_long_string or not current_subject:
+        if line_in_long_string or not current_subject:
             continue
 
         for m in pat.finditer(line):
@@ -370,36 +458,13 @@ def subjects_in_graph(g: Graph) -> List[URIRef]:
     return out
 
 
-def best_label_for_subject(g: Graph, s: URIRef) -> str:
-    labels = [o for o in g.objects(s, RDFS.label) if isinstance(o, Literal)]
-    for lit in labels:
-        if (lit.language or "").lower() == "en":
-            return str(lit)
-    for lit in labels:
-        if lit.language is None:
-            return str(lit)
-    return ""
-
-
-def is_deprecated(g: Graph, s: URIRef) -> bool:
-    for o in g.objects(s, QUDT.deprecated):
-        if isinstance(o, Literal) and (str(o).strip().lower() in {"true", "1", "yes"} or o.value is True):
-            return True
-    return False
-
-
 def compute_literal_paths(
     g: Graph,
     subject: URIRef,
     max_depth: int = 4,
 ) -> Dict[Tuple[URIRef, ...], List[Literal]]:
-    """
-    BFS from subject following URIRef/BNode edges up to max_depth.
-    Collect paths (predicates) that end in a Literal.
-    """
     results: Dict[Tuple[URIRef, ...], List[Literal]] = defaultdict(list)
 
-    # queue holds (node, path_preds)
     q = deque([(subject, tuple())])
     visited = set([(subject, tuple())])
 
@@ -422,49 +487,34 @@ def compute_literal_paths(
     return results
 
 
+GospelKey = Tuple[URIRef, Tuple[URIRef, ...], NumericSig]
+
+
 def build_gospel_lexeme_map(
     g: Graph,
     ttl_text: str,
     prefix_map: Dict[str, str],
     max_depth: int = 4,
-) -> Dict[Tuple[URIRef, Tuple[URIRef, ...], str], str]:
+) -> Dict[GospelKey, str]:
     """
-    Returns a map:
-      (subject_uri, predicate_path, object_literal_id_string) -> exact numeric lexeme
+    Build mapping: (subject, predicate-path, literal-numeric-signature) -> exact numeric lexeme from file.
 
-    We match occurrences to literals by:
-      - subject token -> subject URI
-      - pred token -> last predicate in a path
-      - lexeme string -> must equal str(literal) for a candidate literal
-      - consume matches in file order to disambiguate duplicates
+    Matching uses occ_matches_literal(), which handles float-rounding cases by comparing against float(Decimal(lexeme)).
     """
     occs = scan_numeric_occurrences(ttl_text)
 
-    # Map subject token (CURIE) to subject URI
     token_to_subject_uri: Dict[str, URIRef] = {}
     for s in subjects_in_graph(g):
         parts = try_curie_parts(g, s, prefix_map)
         if parts and parts[0] in prefix_map:
             token_to_subject_uri[f"{parts[0]}:{parts[2]}"] = s
-        # also allow <IRI> style token matching if needed
         token_to_subject_uri[f"<{str(s)}>"] = s
 
-    # Precompute path->literals per subject
     subject_paths: Dict[URIRef, Dict[Tuple[URIRef, ...], List[Literal]]] = {}
     for s in subjects_in_graph(g):
         subject_paths[s] = compute_literal_paths(g, s, max_depth=max_depth)
 
-    # For each subject and path, prepare a multiset of candidate literals by lexical string
-    # We'll consume them as we match occurrences (stable, file-order)
-    candidates: Dict[Tuple[URIRef, Tuple[URIRef, ...], str], List[Literal]] = {}
-    for s, paths in subject_paths.items():
-        for path, lits in paths.items():
-            for lit in lits:
-                # object key must be stable; use python id string + lexical for tie-breakers
-                key = (s, path, str(lit))
-                candidates.setdefault(key, []).append(lit)
-
-    gospel: Dict[Tuple[URIRef, Tuple[URIRef, ...], str], str] = {}
+    gospel: Dict[GospelKey, str] = {}
 
     for occ in occs:
         subj = token_to_subject_uri.get(occ.subject_token)
@@ -474,36 +524,26 @@ def build_gospel_lexeme_map(
         if pred_uri is None:
             continue
 
-        # Find all paths whose last predicate equals pred_uri and that have a literal whose str() matches occ.lexeme
         paths = subject_paths.get(subj, {})
-        matching_paths = [path for path in paths.keys() if path and path[-1] == pred_uri]
-        if not matching_paths:
+        candidate_paths = [p for p in paths.keys() if p and p[-1] == pred_uri]
+        if not candidate_paths:
             continue
-
-        # prefer shorter paths (more likely direct) but keep determinism
-        matching_paths.sort(key=lambda p: (len(p), p))
+        candidate_paths.sort(key=lambda p: (len(p), p))
 
         matched = False
-        for path in matching_paths:
-            lits = [lit for lit in paths.get(path, []) if str(lit) == occ.lexeme]
-            if not lits:
-                continue
-
-            key = (subj, path, occ.lexeme)
-            # consume in order
-            if candidates.get(key):
-                candidates[key].pop(0)
-                gospel[key] = occ.lexeme
-                matched = True
+        for path in candidate_paths:
+            for lit in paths.get(path, []):
+                sig = literal_numeric_signature(lit)
+                if sig is None:
+                    continue
+                if occ_matches_literal(occ.lexeme, lit):
+                    key: GospelKey = (subj, path, sig)
+                    if key not in gospel:
+                        gospel[key] = occ.lexeme
+                    matched = True
+                    break
+            if matched:
                 break
-
-        if not matched:
-            # fall back: if we cannot match by path, still allow direct predicate on subject
-            direct_path = (pred_uri,)
-            key = (subj, direct_path, occ.lexeme)
-            if key in candidates:
-                candidates[key].pop(0)
-                gospel[key] = occ.lexeme
 
     return gospel
 
@@ -512,38 +552,34 @@ def build_gospel_lexeme_map(
 # Rendering
 # -----------------------------
 
-def is_numeric_literal_lex(lit: Literal) -> bool:
-    return bool(NUMERIC_LEX_RE.fullmatch(str(lit).strip()))
-
-
 def render_literal(
     g: Graph,
+    subject: URIRef,
+    path: Tuple[URIRef, ...],
     lit: Literal,
     prefix_map: Dict[str, str],
-    gospel_lexeme: Optional[str],
+    gospel: Dict[GospelKey, str],
 ) -> str:
-    # gospel numeric: if we have it, use it verbatim and unquoted
-    if gospel_lexeme is not None:
-        return f"<span class='prewrap'>{html.escape(gospel_lexeme, quote=False)}</span>"
-
-    # fallback numeric: unquoted if it looks numeric
-    if is_numeric_literal_lex(lit):
+    sig = literal_numeric_signature(lit)
+    if sig is not None:
+        key: GospelKey = (subject, path, sig)
+        lex = gospel.get(key)
+        if lex is not None:
+            return f"<span class='prewrap'>{html.escape(lex, quote=False)}</span>"
+        # fallback: show unquoted numeric form rdflib provides
         return f"<span class='prewrap'>{html.escape(str(lit).strip(), quote=False)}</span>"
 
     raw = str(lit)
 
-    # anyURI: link
     if lit.datatype and URIRef(lit.datatype) == XSD.anyURI:
         href = html.escape(raw, quote=True)
         text = html.escape(raw, quote=False)
         return f"<a href='{href}' class='prewrap'>{text}</a>"
 
-    # LaTeX
     if is_qudt_latex_string(g, lit, prefix_map) or looks_like_latex(raw):
         converted = convert_dollar_math_to_mathjax(raw)
         return f"<span class='prewrap'>{html.escape(converted, quote=False)}</span>"
 
-    # default quoted literal (no datatype display)
     s = f"“{html.escape(raw, quote=False)}”"
     if lit.language:
         s += f"<span class='small'>@{html.escape(lit.language)}</span>"
@@ -556,16 +592,13 @@ def render_object(
     path: Tuple[URIRef, ...],
     o: Any,
     prefix_map: Dict[str, str],
-    gospel: Dict[Tuple[URIRef, Tuple[URIRef, ...], str], str],
+    gospel: Dict[GospelKey, str],
 ) -> str:
     if isinstance(o, URIRef):
         return render_uri(g, o, prefix_map)
     if isinstance(o, Literal):
-        key = (subject, path, str(o))
-        gospel_lex = gospel.get(key)
-        return render_literal(g, o, prefix_map, gospel_lex)
+        return render_literal(g, subject, path, o, prefix_map, gospel)
     if isinstance(o, BNode):
-        # bnode value itself hidden by caller; if rendered, don't expose id
         return ""
     return html.escape(str(o))
 
@@ -576,12 +609,9 @@ def expand_bnode(
     start_path: Tuple[URIRef, ...],
     bn: BNode,
     prefix_map: Dict[str, str],
-    gospel: Dict[Tuple[URIRef, Tuple[URIRef, ...], str], str],
+    gospel: Dict[GospelKey, str],
     max_depth: int = 2,
 ) -> List[Tuple[str, str]]:
-    """
-    Expand bnode a couple hops for display.
-    """
     rows: List[Tuple[str, str]] = []
     if max_depth <= 0:
         return rows
@@ -603,7 +633,7 @@ def subject_rows(
     g: Graph,
     subject: URIRef,
     prefix_map: Dict[str, str],
-    gospel: Dict[Tuple[URIRef, Tuple[URIRef, ...], str], str],
+    gospel: Dict[GospelKey, str],
     bnode_expand_depth: int = 2,
 ) -> List[Tuple[str, str]]:
     rows: List[Tuple[str, str]] = []
@@ -613,7 +643,7 @@ def subject_rows(
         pred_disp = render_uri(g, p, prefix_map)
         path = (p,)
         if isinstance(o, BNode):
-            rows.append((pred_disp, ""))  # leave blank, no bnode id
+            rows.append((pred_disp, ""))  # hide bnode identifier
             rows.extend(expand_bnode(g, subject, path, o, prefix_map, gospel, max_depth=bnode_expand_depth))
         else:
             rows.append((pred_disp, render_object(g, subject, path, o, prefix_map, gospel)))
@@ -621,8 +651,50 @@ def subject_rows(
 
 
 # -----------------------------
+# Index helpers
+# -----------------------------
+
+def best_label_for_subject(g: Graph, s: URIRef) -> str:
+    labels = [o for o in g.objects(s, RDFS.label) if isinstance(o, Literal)]
+    for lit in labels:
+        if (lit.language or "").lower() == "en":
+            return str(lit)
+    for lit in labels:
+        if lit.language is None:
+            return str(lit)
+    return ""
+
+
+def is_deprecated(g: Graph, s: URIRef) -> bool:
+    for o in g.objects(s, QUDT.deprecated):
+        if isinstance(o, Literal) and (str(o).strip().lower() in {"true", "1", "yes"} or o.value is True):
+            return True
+    return False
+
+
+def replacement_link_html(g: Graph, s: URIRef, prefix_map: Dict[str, str]) -> Optional[str]:
+    for o in g.objects(s, DCTERMS.isReplacedBy):
+        if isinstance(o, URIRef):
+            return linkified_curie_or_iri(g, o, prefix_map)
+    return None
+
+
+# -----------------------------
 # Main
 # -----------------------------
+
+def slugify(s: str) -> str:
+    keep = []
+    for ch in s:
+        if ch.isalnum() or ch in ("-", "_", "."):
+            keep.append(ch)
+        elif ch in (":", "/", "#"):
+            keep.append("_")
+        else:
+            keep.append("_")
+    out = "".join(keep).strip("_")
+    return out or "resource"
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Generate per-resource static HTML pages from Turtle RDF.")
@@ -633,6 +705,8 @@ def main() -> int:
     ap.add_argument("--gospel-max-depth", type=int, default=4, help="Max predicate-path depth for gospel numeric matching")
     ap.add_argument("--bnode-expand-depth", type=int, default=2, help="How many bnode hops to expand in HTML")
     args = ap.parse_args()
+
+    generated_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
 
     inp = Path(args.input)
     out_dir = Path(args.out)
@@ -645,7 +719,6 @@ def main() -> int:
     g.parse(str(inp), format=args.format)
     bind_prefix_map(g, prefix_map)
 
-    # Build gospel map robustly (semantic paths, file-order disambiguation)
     gospel = build_gospel_lexeme_map(g, ttl_text, prefix_map, max_depth=args.gospel_max_depth)
 
     env = Environment(loader=BaseLoader(), autoescape=select_autoescape(enabled_extensions=("html", "xml")))
@@ -673,6 +746,7 @@ def main() -> int:
                 types=types,
                 triples=triples,
                 index_href="index.html",
+                generated_at=generated_at,
             ),
             encoding="utf-8",
         )
@@ -684,13 +758,22 @@ def main() -> int:
         curie = f"{parts[0]}:{parts[2]}" if parts else str(s)
         label = best_label_for_subject(g, s)
         deprecated = is_deprecated(g, s)
-        key = (curie + " " + label).lower()
+        replaced_by_html = replacement_link_html(g, s, prefix_map) if deprecated else None
+
+        key_bits = [curie, label]
+        if deprecated:
+            key_bits.append("deprecated")
+        if replaced_by_html:
+            key_bits.append(re.sub(r"<[^>]+>", "", replaced_by_html))
+        key = " ".join(k for k in key_bits if k).lower()
+
         items.append(
             {
                 "href": href,
                 "curie": html.escape(curie),
                 "label": html.escape(label),
                 "deprecated": deprecated,
+                "replaced_by_html": replaced_by_html,
                 "key": html.escape(key),
             }
         )
@@ -698,25 +781,12 @@ def main() -> int:
     items.sort(key=lambda it: it["key"])
 
     (out_dir / "index.html").write_text(
-        index_t.render(title=args.title, count=len(items), items=items),
+        index_t.render(title=args.title, count=len(items), items=items, generated_at=generated_at),
         encoding="utf-8",
     )
 
     print(f"Wrote {len(subjects)} pages + index to: {out_dir.resolve()}")
     return 0
-
-
-def slugify(s: str) -> str:
-    keep = []
-    for ch in s:
-        if ch.isalnum() or ch in ("-", "_", "."):
-            keep.append(ch)
-        elif ch in (":", "/", "#"):
-            keep.append("_")
-        else:
-            keep.append("_")
-    out = "".join(keep).strip("_")
-    return out or "resource"
 
 
 if __name__ == "__main__":
