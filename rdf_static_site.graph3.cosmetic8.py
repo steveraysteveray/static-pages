@@ -59,8 +59,10 @@ PAGE_TMPL = """<!doctype html>
     .uri-box { margin-top: 0.35rem; padding: 0.5rem 0.75rem; background: #f7f7f7; border: 1px solid #ddd; border-radius: 8px; display: inline-block; }
     .uri-label { font-size: 0.85rem; color: #666; margin-right: 0.5rem; }
     table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #ddd; padding: 0.6rem 0.7rem; vertical-align: top; }
+    th, td { border: none; padding: 0.6rem 0.7rem; vertical-align: top; }
     th { text-align: left; background: #f7f7f7; width: 18rem; }
+    tbody tr:nth-child(even) { background: #fbfbfb; }
+    tbody tr:hover { background: #f3f3f3; }
     .prewrap { white-space: pre-wrap; }
     ul.values { margin: 0.2rem 0 0.2rem 1.2rem; padding: 0; }
     ul.values li { margin: 0.15rem 0; }
@@ -75,7 +77,6 @@ PAGE_TMPL = """<!doctype html>
     <h1>{{ subject_display|safe }}</h1>
     <div class="uri-box"><span class="uri-label">URI:</span><a href="{{ subject_uri }}"><code>{{ subject_uri }}</code></a></div>
     <div class="meta">
-      <a href="{{ index_href }}">← Index</a>
       {% if types %}
         <div class="small">rdf:type:
           {% for t in types %}
